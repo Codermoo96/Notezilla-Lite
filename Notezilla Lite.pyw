@@ -33,7 +33,7 @@ class StickyNote:
         self.window.protocol("WM_DELETE_WINDOW", self.save_and_close)
 
         self.text = tk.Text(self.window, wrap="word", bg=self.bg_color,
-                            font=("Arial", 12), relief="flat")
+                            font=("Arial", 10), relief="flat")
         self.text.insert("1.0", self.text_content)
         self.text.pack(expand=True, fill="both", padx=5, pady=5)
 
