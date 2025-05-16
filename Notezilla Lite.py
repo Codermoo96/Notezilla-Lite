@@ -113,4 +113,6 @@ class StickyNote:
                 os.remove(self.note_path)
             self.root.destroy()
 
-# Launch
+# Launch the app
+if __name__ == "__main__":
+    StickyNote()
