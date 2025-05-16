@@ -27,15 +27,37 @@ class StickyNote:
 
         self.window = self.master if self.is_main else tk.Toplevel(self.master)
         self.window.title(f"Sticky Note - {self.note_id[:4]}")
-        self.window.geometry("250x200")
+        
+        # Set the window size to be a little wider and taller
+        self.window.geometry("300x250")
+
+        # Start in the upper-right corner
+        screen_width = self.window.winfo_screenwidth()
+        screen_height = self.window.winfo_screenheight()
+        self.window.geometry(f"300x250+{screen_width - 310}+10")  # 10px margin from top-right corner
+
         self.window.attributes("-topmost", True)
         self.window.configure(bg=self.bg_color)
         self.window.protocol("WM_DELETE_WINDOW", self.save_and_close)
 
-        self.text = tk.Text(self.window, wrap="word", bg=self.bg_color,
-                            font=("Arial", 10), relief="flat")
+        # Add a scrollable text area
+        self.text_frame = tk.Frame(self.window)
+        self.text_frame.pack(expand=True, fill="both", padx=5, pady=5)
+
+        self.canvas = tk.Canvas(self.text_frame)
+        self.canvas.pack(side="left", fill="both", expand=True)
+
+        self.scrollbar = tk.Scrollbar(self.text_frame, orient="vertical", command=self.canvas.yview)
+        self.scrollbar.pack(side="right", fill="y")
+
+        self.canvas.config(yscrollcommand=self.scrollbar.set)
+
+        self.text = tk.Text(self.canvas, wrap="word", bg=self.bg_color,
+                            font=("Arial", 12), relief="flat", height=10, width=35)
         self.text.insert("1.0", self.text_content)
-        self.text.pack(expand=True, fill="both", padx=5, pady=5)
+        self.canvas.create_window((0, 0), window=self.text, anchor="nw")
+
+        self.text.bind("<Configure>", lambda e: self.canvas.config(scrollregion=self.canvas.bbox("all")))
 
         if self.locked:
             self.text.config(state="disabled")
