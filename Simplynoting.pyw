@@ -1,152 +1,141 @@
-import tkinter as tk
-from tkinter import messagebox, simpledialog
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QVBoxLayout, QWidget, QTextEdit, QPushButton,
+    QHBoxLayout, QLabel, QFileDialog, QMessageBox
+)
+from PySide6.QtCore import Qt, QTimer, QDate
+import sys
 import os
-import uuid
-import json
 
-SAVE_DIR = "notes_data"
-if not os.path.exists(SAVE_DIR):
-    os.makedirs(SAVE_DIR)
+AUTOSAVE_PATH = "autosave.txt"
 
-def get_note_path(note_id):
-    return os.path.join(SAVE_DIR, f"{note_id}.json")
-
-class StickyNote:
-    def __init__(self, master=None, note_id=None):
-        self.master = master or tk.Tk()
-        self.is_main = master is None
-
-        self.note_id = note_id or str(uuid.uuid4())
-        self.note_path = get_note_path(self.note_id)
-
-        self.locked = False
-        self.bg_color = "lightyellow"
-        self.text_content = ""
-
-        self.load_note()
-
-        self.window = self.master if self.is_main else tk.Toplevel(self.master)
-        self.window.title(f"Sticky Note - {self.note_id[:4]}")
+class SimplyNoting(QMainWindow):
+    def __init__(self):
+        super().__init__()
         
-        # Set the window size to be a little wider and taller
-        self.window.geometry("300x250")
+        self._drag_pos = None # Går att dra
+        # Frameless + always on top
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
 
-        # Start in the upper-right corner
-        screen_width = self.window.winfo_screenwidth()
-        screen_height = self.window.winfo_screenheight()
-        self.window.geometry(f"300x250+{screen_width - 310}+10")  # 10px margin from top-right corner
+        self.setMinimumSize(200, 300)
 
-        self.window.attributes("-topmost", True)
-        self.window.configure(bg=self.bg_color)
-        self.window.protocol("WM_DELETE_WINDOW", self.save_and_close)
+        # === Central widget ===
+        central = QWidget()
+        central.setStyleSheet("background-color: #ffff99; border: 1px solid #555;")
+        self.setCentralWidget(central)
 
-        # Add a scrollable text area
-        self.text_frame = tk.Frame(self.window)
-        self.text_frame.pack(expand=True, fill="both", padx=5, pady=5)
+        main_layout = QVBoxLayout(central)
 
-        self.canvas = tk.Canvas(self.text_frame)
-        self.canvas.pack(side="left", fill="both", expand=True)
+        # === Top bar (hidden until hover) ===
+        self.topbar = QWidget()
+        self.topbar.setStyleSheet("background-color: #eeee88;")
+        topbar_layout = QHBoxLayout(self.topbar)
+        topbar_layout.setContentsMargins(5, 2, 5, 2)
 
-        self.scrollbar = tk.Scrollbar(self.text_frame, orient="vertical", command=self.canvas.yview)
-        self.scrollbar.pack(side="right", fill="y")
+        self.title_label = QLabel("SimplyNoting")
+        self.date_label = QLabel(QDate.currentDate().toString(Qt.ISODate))
+        self.close_button = QPushButton("X")
+        self.close_button.setFixedSize(20, 20)
+        self.close_button.setStyleSheet("background-color: #ff5555; color: white; border: none;")
+        self.close_button.clicked.connect(self.close)
 
-        self.canvas.config(yscrollcommand=self.scrollbar.set)
+        topbar_layout.addWidget(self.title_label)
+        topbar_layout.addStretch()
+        topbar_layout.addWidget(QLabel("Datum:"))
+        topbar_layout.addWidget(self.date_label)
+        topbar_layout.addWidget(self.close_button)
 
-        self.text = tk.Text(self.canvas, wrap="word", bg=self.bg_color,
-                            font=("Arial", 12), relief="flat", height=10, width=35)
-        self.text.insert("1.0", self.text_content)
-        self.canvas.create_window((0, 0), window=self.text, anchor="nw")
+        self.topbar.hide()  # start hidden
+        main_layout.addWidget(self.topbar)
 
-        self.text.bind("<Configure>", lambda e: self.canvas.config(scrollregion=self.canvas.bbox("all")))
+        # === Text area ===
+        self.text_edit = QTextEdit()
+        self.text_edit.setStyleSheet("background-color: #ffff99; border: none;")
+        self.text_edit.setPlaceholderText("Skriv dagliga to-dos eller tankar här...")
+        main_layout.addWidget(self.text_edit)
 
-        if self.locked:
-            self.text.config(state="disabled")
+        # === Button row ===
+        button_layout = QHBoxLayout()
+        main_layout.addLayout(button_layout)
 
-        self.menu = tk.Menu(self.window, tearoff=0)
-        self.menu.add_command(label="New Note", command=self.create_new_note)
-        self.menu.add_command(label="Lock Editing", command=self.toggle_lock)
-        self.menu.add_command(label="Change Color", command=self.change_color)
-        self.menu.add_command(label="Delete Note", command=self.delete_note)
-        self.menu.add_command(label="Close", command=self.save_and_close)
+        # === Autosave timer ===
+        self.autosave_timer = QTimer()
+        self.autosave_timer.timeout.connect(self.autosave)
+        self.autosave_timer.start(10_000)  # varje 10 sek
 
-        self.window.bind("<Button-3>", self.show_menu)
-        self.text.bind("<KeyRelease>", lambda e: self.save_note())
+        # === Hover detection ===
+        self.setMouseTracking(True)
+        central.setMouseTracking(True)
+        self.text_edit.setMouseTracking(True)
 
-        if self.is_main:
-            self.master.mainloop()
+        # === Load previous autosave ===
+        self.load_autosave()
 
-    def load_note(self):
-        if os.path.exists(self.note_path):
-            with open(self.note_path, "r") as f:
-                data = json.load(f)
-                self.text_content = data.get("text", "")
-                self.bg_color = data.get("color", "lightyellow")
-                self.locked = data.get("locked", False)
 
-    def save_note(self):
-        if self.locked:
-            return
-        data = {
-            "text": self.text.get("1.0", "end-1c"),
-            "color": self.bg_color,
-            "locked": self.locked
-        }
-        with open(self.note_path, "w") as f:
-            json.dump(data, f)
+        self.topbar.mousePressEvent = self.topbar_mouse_press
+        self.topbar.mouseMoveEvent = self.topbar_mouse_move
+        self.topbar.mouseReleaseEvent = self.topbar_mouse_release
 
-    def save_and_close(self):
-        self.save_note()
-        self.window.destroy()
+    def enterEvent(self, event):
+        self.topbar.show()
 
-    def show_menu(self, event):
-        self.menu.tk_popup(event.x_root, event.y_root)
+    def leaveEvent(self, event):
+        QTimer.singleShot(500, self.hide_topbar_if_needed)
 
-    def create_new_note(self):
-        StickyNote(master=self.master)  # Create a new Toplevel note
+    def hide_topbar_if_needed(self):
+        if not self.underMouse():
+            self.topbar.hide()
 
-    def toggle_lock(self):
-        self.locked = not self.locked
-        state = "disabled" if self.locked else "normal"
-        self.text.config(state=state)
-        self.save_note()
+    def autosave(self):
+        try:
+            with open(AUTOSAVE_PATH, 'w', encoding='utf-8') as f:
+                f.write(f"Datum: {self.date_label.text()}\n\n")
+                f.write(self.text_edit.toPlainText())
+        except Exception as e:
+            print(f"[Autosparning] Fel: {e}")
 
-    def change_color(self):
-        colors = {
-            "Yellow": "lightyellow",
-            "Green": "lightgreen",
-            "Pink": "lightpink",
-            "Blue": "lightblue",
-            "White": "white"
-        }
-        choice = simpledialog.askstring("Choose Color", f"Options: {', '.join(colors)}", parent=self.window)
-        if choice and choice in colors:
-            self.bg_color = colors[choice]
-            self.text.config(bg=self.bg_color)
-            self.window.config(bg=self.bg_color)
-            self.save_note()
-        elif choice:
-            messagebox.showinfo("Invalid Color", f"'{choice}' is not a valid color.")
+    def load_autosave(self):
+        if os.path.exists(AUTOSAVE_PATH):
+            try:
+                with open(AUTOSAVE_PATH, 'r', encoding='utf-8') as f:
+                    lines = f.read().splitlines()
+                    if lines and lines[0].startswith("Datum: "):
+                        self.date_label.setText(lines[0][7:])
+                    self.text_edit.setPlainText('\n'.join(lines[2:]))
+            except Exception as e:
+                print(f"[Laddning] Fel: {e}")
 
-    def delete_note(self):
-        confirm = messagebox.askyesno("Delete", "Are you sure you want to delete this note?", parent=self.window)
-        if confirm:
-            if os.path.exists(self.note_path):
-                os.remove(self.note_path)
-            self.window.destroy()
 
-# 🚀 AUTO-LOAD all notes on startup
+    def topbar_mouse_press(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+
+    def topbar_mouse_move(self, event):
+        if self._drag_pos and event.buttons() & Qt.LeftButton:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
+
+    def topbar_mouse_release(self, event):
+        self._drag_pos = None
+        event.accept()
+
+
+    def open_note(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Öppna anteckning", "", "Textfiler (*.txt)")
+        if file_path:
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    lines = f.read().splitlines()
+                    if lines and lines[0].startswith("Datum: "):
+                        self.date_label.setText(lines[0][7:])
+                    self.text_edit.setPlainText('\n'.join(lines[2:]))
+            except Exception as e:
+                QMessageBox.critical(self, "Fel vid öppning", str(e))
+    
+
 if __name__ == "__main__":
-    root = tk.Tk()
-    root.withdraw()  # Hide the root window
-
-    found = False
-    for filename in os.listdir(SAVE_DIR):
-        if filename.endswith(".json"):
-            note_id = filename.replace(".json", "")
-            StickyNote(master=root, note_id=note_id)
-            found = True
-
-    if not found:
-        StickyNote(master=root)  # Create a blank note if none exist
-
-    root.mainloop()
+    app = QApplication(sys.argv)
+    window = SimplyNoting()
+    window.show()
+    sys.exit(app.exec())
